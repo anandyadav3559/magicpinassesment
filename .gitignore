@@ -1,0 +1,27 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+.env
+
+# Logs
+*.log
+test_run.log
+judge_run.log
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+
+# Testing and Type Checking
+.pytest_cache/
+.coverage
+.mypy_cache/
+.ruff_cache/
