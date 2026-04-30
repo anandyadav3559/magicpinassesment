@@ -24,109 +24,7 @@ except Exception as e:
 
 MODEL_NAME = "llama-3.3-70b-versatile"
 
-def triage_node(state: GraphState) -> GraphState:
-    """Extracts a StrategyBrief based on contexts."""
-    if not state.get("merchant") or not state.get("trigger") or not instructor_client:
-        return state
-        
-    prompt = f"""
-    You are an expert engagement strategist for magicpin. Create a StrategyBrief.
-    
-    Trigger: {state['trigger'].model_dump_json()}
-    Merchant: {state['merchant'].model_dump_json()}
-    """
-    if state.get("category"):
-        prompt += f"\nCategory Voice: {state['category'].voice.model_dump_json()}"
-    if state.get("customer"):
-        prompt += f"\nCustomer: {state['customer'].model_dump_json()}"
-        
-    strategy = instructor_client.chat.completions.create(
-        model=MODEL_NAME,
-        response_model=StrategyBrief,
-        messages=[
-            {"role": "system", "content": "Analyze the context and define the strategy."},
-            {"role": "user", "content": prompt}
-        ]
-    )
-    return {"strategy_brief": strategy, **state}
-
-def composer_node(state: GraphState) -> GraphState:
-    """Drafts the message based on the StrategyBrief."""
-    if not state.get("strategy_brief") or not instructor_client:
-        return state
-        
-    prompt = f"""
-    Draft a WhatsApp message following this strategy strictly.
-    Strategy: {state['strategy_brief'].model_dump_json()}
-    """
-    
-    if state.get("critic_scorecard") and not state["critic_scorecard"].passed:
-        prompt += f"\n\nCRITICAL FEEDBACK FROM PREVIOUS DRAFT: {state['critic_scorecard'].feedback}. YOU MUST FIX THIS."
-
-    draft = instructor_client.chat.completions.create(
-        model=MODEL_NAME,
-        response_model=ComposedMessage,
-        messages=[
-            {"role": "system", "content": "You are Vera. Write WhatsApp messages strictly adhering to the grading dimensions and rationale-first prompting."},
-            {"role": "user", "content": prompt}
-        ]
-    )
-    return {"draft_message": draft, **state}
-
-def critic_node(state: GraphState) -> GraphState:
-    """Scores the draft. Returns feedback."""
-    if not state.get("draft_message") or not instructor_client:
-        return state
-        
-    prompt = f"""
-    Evaluate the following draft message out of 10 for each dimension.
-    Draft: {state['draft_message'].model_dump_json()}
-    Original Strategy: {state['strategy_brief'].model_dump_json()}
-    """
-    
-    scorecard = instructor_client.chat.completions.create(
-        model=MODEL_NAME,
-        response_model=CriticScorecard,
-        messages=[
-            {"role": "system", "content": "You are a strict Judge. Grade the message on Decision Quality, Specificity, Category Fit, Merchant Fit, and Engagement."},
-            {"role": "user", "content": prompt}
-        ]
-    )
-    
-    # Check if passed
-    all_passed = (scorecard.decision_quality_score >= 9 and 
-                  scorecard.specificity_score >= 9 and 
-                  scorecard.category_fit_score >= 9 and 
-                  scorecard.merchant_fit_score >= 9 and 
-                  scorecard.engagement_score >= 9)
-    scorecard.passed = all_passed
-                  
-    return {"critic_scorecard": scorecard, "retries": state.get("retries", 0) + 1, **state}
-
-def route_critic(state: GraphState) -> str:
-    """Decides whether to retry or end."""
-    if not state.get("critic_scorecard"):
-        return END
-        
-    if state["critic_scorecard"].passed or state.get("retries", 0) >= 2:
-        return END
-        
-    return "composer"
-
-# Build the Graph
-workflow = StateGraph(GraphState)
-workflow.add_node("triage", triage_node)
-workflow.add_node("composer", composer_node)
-workflow.add_node("critic", critic_node)
-
-workflow.set_entry_point("triage")
-workflow.add_edge("triage", "composer")
-workflow.add_edge("composer", "critic")
-workflow.add_conditional_edges("critic", route_critic, {"composer": "composer", END: END})
-
-tcc_app = workflow.compile()
-
-
+# Remove LangGraph logic and replace with direct CoT call
 def process_tick(
     category: Dict[str, Any],
     merchant: Dict[str, Any],
@@ -136,12 +34,11 @@ def process_tick(
 ) -> Optional[Dict[str, Any]]:
     """
     Called every time the judge says a trigger is active.
-    Runs the TCC Pipeline.
+    Runs a single Chain-of-Thought LLM call to draft the optimal message.
     """
-    if not merchant or not trigger:
+    if not merchant or not trigger or not instructor_client:
         return None
         
-    # Convert dicts to Pydantic models (graceful fallback if keys missing)
     try:
         cat_model = CategoryContext(**category) if category else None
         merch_model = MerchantContext(**merchant) if merchant else None
@@ -149,31 +46,56 @@ def process_tick(
         cust_model = CustomerContext(**customer) if customer else None
     except Exception as e:
         print(f"Pydantic Validation Error: {e}")
-        return None # Graceful fail on bad context
+        return None
         
     if not merch_model or not trig_model:
         return None
 
-    # Run LangGraph
-    initial_state = {
-        "category": cat_model,
-        "merchant": merch_model,
-        "trigger": trig_model,
-        "customer": cust_model,
-        "strategy_brief": None,
-        "draft_message": None,
-        "critic_scorecard": None,
-        "retries": 0
-    }
+    # Construct the supercharged prompt
+    from models.internal_models import CoTDraftMessage
+
+    prompt = f"""
+    You are an expert engagement strategist for magicpin. Compose a WhatsApp message based on this trigger.
     
+    ### CONTEXT ###
+    Trigger Event (Why we are messaging NOW):
+    {trig_model.model_dump_json()}
+    
+    Merchant (Who we are messaging or acting on behalf of):
+    {merch_model.model_dump_json()}
+    """
+    
+    if cat_model:
+        prompt += f"""
+    Category Voice & Taboos (STRICTLY ADHERE TO THIS):
+    Tone: {cat_model.voice.tone}
+    Allowed Vocabulary: {cat_model.voice.vocab_allowed}
+    TABOO WORDS (DO NOT USE): {cat_model.voice.vocab_taboo}
+    """
+    
+    if cust_model:
+        prompt += f"\nCustomer (Who we are messaging on behalf of the merchant):\n{cust_model.model_dump_json()}"
+
+    prompt += """
+    ### GRADING RULES FOR 10/10 SCORE ###
+    1. SPECIFICITY: You MUST include concrete numbers, dates, or prices from the context. Do not use generic placeholders like 'XX% off' if a specific price like '₹299' is available.
+    2. CATEGORY FIT: You MUST adhere to the Category Voice. Do not use Taboo words.
+    3. MERCHANT FIT: Personalize the message to the merchant. Use their actual performance numbers or offer names. Adhere to their language preference.
+    4. TRIGGER RELEVANCE: Explicitly anchor the message on the trigger payload. State why you are messaging them today.
+    5. ENGAGEMENT COMPULSION: End with a single, clear, low-friction CTA (e.g., 'Reply YES to proceed' or a simple question).
+    """
+
     try:
-        final_state = tcc_app.invoke(initial_state)
+        draft = instructor_client.chat.completions.create(
+            model=MODEL_NAME,
+            response_model=CoTDraftMessage,
+            messages=[
+                {"role": "system", "content": "You are Vera, magicpin's elite AI assistant. Think step-by-step to maximize your score across the 5 grading dimensions before drafting the exact WhatsApp message."},
+                {"role": "user", "content": prompt}
+            ]
+        )
     except Exception as e:
-        print(f"LLM/Graph Error: {e}")
-        return None
-        
-    draft = final_state.get("draft_message")
-    if not draft:
+        print(f"LLM Error in process_tick: {e}")
         return None
         
     return {
@@ -187,5 +109,5 @@ def process_tick(
         "body": draft.body, 
         "cta": draft.cta,
         "suppression_key": draft.suppression_key,
-        "rationale": draft.rationale
+        "rationale": f"CoT Strategy: {draft.reasoning_and_strategy[:200]}... | Rationale: {draft.rationale}"
     }

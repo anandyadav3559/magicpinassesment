@@ -5,13 +5,13 @@ from typing import List, Dict, Any, Optional
 class VoiceProfile(BaseModel):
     tone: str
     vocab_allowed: List[str]
-    taboos: List[str]
+    vocab_taboo: List[str] = Field(default_factory=list, alias="vocab_taboo")
 
 class PeerStats(BaseModel):
-    avg_rating: float
-    avg_reviews: int
-    avg_ctr: float
-    scope: str
+    avg_rating: float = Field(default=0.0)
+    avg_review_count: int = Field(default=0, alias="avg_review_count")
+    avg_ctr: float = Field(default=0.0)
+    scope: str = Field(default="")
 
 class CategoryContext(BaseModel):
     slug: str
@@ -25,30 +25,33 @@ class CategoryContext(BaseModel):
 
 # --- Merchant Context ---
 class Identity(BaseModel):
-    name: str
-    city: str
-    locality: str
-    place_id: str
-    verified: bool
-    languages: List[str]
+    name: str = ""
+    city: str = ""
+    locality: str = ""
+    place_id: str = ""
+    verified: bool = False
+    languages: List[str] = Field(default_factory=list)
 
 class Subscription(BaseModel):
-    status: str
-    plan: str
-    days_remaining: int
+    status: str = ""
+    plan: str = ""
+    days_remaining: int = Field(default=0)
 
 class PerformanceSnapshot(BaseModel):
-    window_days: int
-    views: int
-    calls: int
-    directions: int
-    ctr: float
-    delta_7d: Dict[str, float]
+    window_days: int = 7
+    views: int = 0
+    calls: int = 0
+    directions: int = 0
+    ctr: float = 0.0
+    delta_7d: Dict[str, float] = Field(default_factory=dict)
 
 class CustomerAggregate(BaseModel):
-    total_unique_ytd: int
-    lapsed_180d_plus: int
-    retention_6mo_pct: float
+    total_unique_ytd: int = Field(default=0)
+    lapsed_180d_plus: int = Field(default=0)
+    retention_6mo_pct: float = Field(default=0.0)
+    # Add alias-like handling for other fields observed in logs
+    total_active_members: int = Field(default=0)
+    retention_3mo_pct: float = Field(default=0.0)
 
 class MerchantContext(BaseModel):
     merchant_id: str
