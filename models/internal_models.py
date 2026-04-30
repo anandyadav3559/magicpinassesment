@@ -27,3 +27,6 @@ class GraphState(TypedDict):
     draft_message: Optional[ComposedMessage]
     critic_scorecard: Optional[CriticScorecard]
     retries: int
+
+class CoTDraftMessage(ComposedMessage):
+    reasoning_and_strategy: str = Field(..., description="Chain of thought reasoning on how to score 10/10 on Specificity, Category Fit, Merchant Fit, Decision Quality, and Engagement Compulsion before drafting the message.")

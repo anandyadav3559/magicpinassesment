@@ -36,7 +36,7 @@ def detect_auto_reply_loop(merchant_id: str, current_msg: str) -> bool:
             return True
     return False
 
-def process_reply(state: List[Dict[str, str]], request_body: Any) -> Dict[str, Any]:
+def process_reply(state: List[Dict[str, str]], request_body: Any, merchant: Optional[Dict[str, Any]] = None, category: Optional[Dict[str, Any]] = None, customer: Optional[Dict[str, Any]] = None, trigger: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
     Given the conversation state so far, produce the reply using the LLM.
     Handles edge cases gracefully.
@@ -61,15 +61,43 @@ def process_reply(state: List[Dict[str, str]], request_body: Any) -> Dict[str, A
     for msg in state:
         transcript += f"{msg['from'].upper()}: {msg['msg']}\n"
         
+    merchant_info = ""
+    if merchant:
+        offers = [o.get("title") for o in merchant.get("offers", []) if o.get("status") == "active"]
+        merchant_info = f"\nYou are acting on behalf of {merchant.get('identity', {}).get('name', 'this merchant')}.\nActive Offers you can quote: {offers}"
+    
+    customer_info = ""
+    if customer:
+        customer_info = f"\nYou are talking to {customer.get('identity', {}).get('name', 'a customer')}."
+        
+    category_info = ""
+    if category:
+        tone = category.get("voice", {}).get("tone", "")
+        patient_content = category.get("patient_content_library", [])
+        category_info = f"\nUse this tone: {tone}.\nPatient Content Snippets you can use: {[c.get('title') for c in patient_content]}"
+        
+    trigger_info = ""
+    if trigger:
+        trigger_info = f"\nThe original context for this conversation was: {json.dumps(trigger.get('payload', {}))}."
+        
+    role_instruction = "merchant assistant"
+    if getattr(request_body, "from_role", "") == "customer":
+        role_instruction = "Vera, a helpful assistant acting on behalf of the merchant, talking to a customer."
+    else:
+        role_instruction = "Vera, an AI engagement strategist acting for magicpin, talking to the merchant."
+
     prompt = f"""
     Analyze this conversation transcript and decide the next action.
     Transcript:
     {transcript}
     
-    CRITICAL RULE 1: If the merchant agrees, says 'let's do it', or asks for the next step, you MUST choose 'send'. 
-    In the body, use action words like 'done', 'sending', 'draft', 'here', 'confirm', or 'proceed'. Do NOT ask qualifying questions if they already agreed.
+    Role: You are {role_instruction}. {merchant_info} {customer_info} {category_info} {trigger_info}
     
-    CRITICAL RULE 2: If the merchant's message looks like an automated generic response (e.g., 'Thank you for contacting us', 'Our team will respond shortly', 'out of office'), you MUST choose 'wait'. Do not reply to automated messages.
+    CRITICAL GRADING RULES:
+    1. INTENT TRANSITION: If the user says 'yes', 'let's do it', 'go ahead', or asks for the next step, you MUST switch to ACTION mode immediately. Do NOT ask more qualifying questions. Write the action outcome in the 'body' and choose 'send'.
+    2. HOSTILITY HANDLING: If the user is hostile, abusive, or says "stop messaging me", you MUST choose 'end' action, and leave 'body' blank or write a very brief polite apology.
+    3. SPECIFICITY: If you are sending a message, you MUST include concrete numbers, dates, or prices from the Active Offers or Context. Never hallucinate fake prices.
+    4. AUTO-REPLIES: If the user's message looks like an automated generic response (e.g., 'Thank you for contacting us', 'Our team will respond shortly'), you MUST choose 'wait' or 'end'. Do not engage with auto-replies.
     """
     
     try:

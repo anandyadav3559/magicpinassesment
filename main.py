@@ -124,8 +124,25 @@ async def reply(body: ReplyBody):
     
     state = conversations[body.conversation_id]
     
+    merchant = contexts.get(("merchant", body.merchant_id), {}).get("payload") if body.merchant_id else None
+    
+    category = None
+    if merchant:
+        category_slug = merchant.get("category_slug")
+        category = contexts.get(("category", category_slug), {}).get("payload")
+        
+    customer = contexts.get(("customer", body.customer_id), {}).get("payload") if body.customer_id else None
+    
+    trigger = None
+    if body.merchant_id:
+        # Find the first trigger for this merchant to provide context
+        for (scope, ctx_id), ctx in contexts.items():
+            if scope == "trigger" and ctx["payload"].get("merchant_id") == body.merchant_id:
+                trigger = ctx["payload"]
+                break
+    
     # Call our conversational logic
-    action = conversation_handlers.process_reply(state, body)
+    action = conversation_handlers.process_reply(state, body, merchant, category, customer, trigger)
     
     return action
 

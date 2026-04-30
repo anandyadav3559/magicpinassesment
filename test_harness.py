@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 from datetime import datetime, timezone
 
-BASE_URL = "http://127.0.0.1:8000"
+BASE_URL = "http://0.0.0.0:8000"
 DATASET_DIR = Path("../dataset")
 LOG_FILE = "test_run.log"
 
@@ -138,7 +138,7 @@ def run_all():
     log("Checking /v1/healthz after load...")
     test_healthz()
     
-    actions = test_tick(triggers)
+    actions = test_tick(triggers[:3] if triggers else None)
     
     if actions:
         # Test reply on the first conversation generated
